@@ -1,0 +1,10 @@
+{
+  "name": "mtg-commander",
+  "description": "Build Commander/EDH decks from scratch, or audit an existing list against EDHTop16 and cedhstats tournament data to recommend swaps. Handles partner commanders, cEDH lists, and new-card screening.",
+  "version": "2.0.0",
+  "author": {
+    "name": "Paul Baker"
+  },
+  "homepage": "https://github.com/qq-eyes/mtg-commander",
+  "license": "Apache-2.0"
+}

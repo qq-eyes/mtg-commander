@@ -1,0 +1,1371 @@
+---
+name: mtg-commander
+description: >
+  MTG Commander deck builder and deck auditor. Build synergy-dense,
+  format-legal, budget-compliant 100-card Commander decklists from scratch, or
+  audit an existing list against real tournament data from EDHTop16 and
+  cedhstats to recommend swaps. Handles partner commanders, cEDH lists, and
+  new-card screening from recent sets. Triggers on phrases like "build a
+  commander deck", "MTG deck", "commander deck", "EDH deck", "build me a deck",
+  "100-card deck", "commander pipeline", "deck builder", and on audit requests
+  such as "evaluate my deck", "is this list optimal", "what should I swap",
+  "how does my deck compare to the meta", "deck help", or any message that
+  includes a Moxfield, Archidekt, or EDHTop16 deck link alongside a request for
+  feedback. Use this skill whenever a Commander deck is being built, critiqued,
+  or tuned, even if the user does not say "deck builder".
+license: Apache License 2.0 - Copyright 2026 Paul Baker. See LICENSE.txt and NOTICE.
+model_awareness: opus-4-7
+last_audited: 2026-10-18
+pattern_library_version: 4-7-2
+---
+
+# MTG Commander Deck Builder & Auditor
+
+Two modes sharing one toolkit:
+
+- **Build mode** — a multi-agent pipeline that constructs optimized, format-legal,
+  budget-compliant Commanders decklists from intake parameters.
+- **Audit mode** — evaluate an existing deck against tournament data and produce a
+  swap sheet. This is the mode to use whenever the user supplies a deck.
+
+Both modes share `scripts/card_lookup.py` (Scryfall) and the reference library.
+Audit mode adds `scripts/deck_sources.py`, `scripts/meta_sources.py`, and
+`scripts/audit_compare.py`.
+
+> **User-facing guide:** see [`README.md`](README.md) for install, quick start, and troubleshooting. Config authoring walkthrough at [`references/config-walkthrough.md`](references/config-walkthrough.md). Audit methodology: [`references/audit-guide.md`](references/audit-guide.md).
+
+## Mode Selection
+
+Decide before intake:
+
+| The user… | Mode |
+|---|---|
+| Asks for a deck, names a commander with no list, wants to start fresh | **Build** |
+| Supplies a decklist, deck URL, or asks what to change about an existing deck | **Audit** |
+| Supplies a deck *and* asks for a rebuild | **Audit first**, then offer targeted swaps |
+| Asks how a deck compares to the meta, or whether a list is optimal | **Audit** |
+
+Auditing before rebuilding matters: a full rebuild discards the pilot's tuning,
+card availability, and playgroup context. Most decks that arrive for review are
+already close to correct and need a handful of swaps, not a new list. Offer the
+rebuild only after showing that the list is far from the consensus core.
+
+Say which mode you are entering in one line, then proceed. Do not run build-mode
+intake questions on a user who handed you a deck.
+
+## Sub-Agent Dispatch Guardrail
+
+Every pipeline step — primary agents and challenger agents alike — MUST be dispatched as a separate sub-agent using whatever sub-agent mechanism the current runtime provides (the Agent tool in Claude Code; equivalent task/sub-agent tools elsewhere). This is NON-NEGOTIABLE.
+
+NEVER inline any pipeline step. Running a pipeline step inside the orchestrator's own context instead of spawning a dedicated sub-agent is a GUARDRAIL VIOLATION. If you catch yourself thinking "I'll just run this step inline to save time," stop. That thought is the violation.
+
+**Rationale:**
+
+- **Context isolation** — each agent receives only its defined inputs (deck state, intake params, reference files). No bleed from prior agent reasoning.
+- **Adversarial independence** — challengers MUST NOT share context with the primary they are reviewing. Shared context defeats the entire adversarial architecture.
+- **Correction loop integrity** — self-correction routing depends on clean agent boundaries. Inlined steps corrupt the correction signal.
+
+**Anti-pattern (from real session REDACTED):**
+
+> "I'll run the agent roles inline to keep things moving..."
+
+This collapsed all four agents into a single context window, destroyed adversarial independence, and produced a deck with 14 undetected color identity violations. The correction loop never fired because there were no agent boundaries to trigger it. NEVER repeat this.
+
+**All 8 dispatches** (4 primary + 4 challenger) MUST be separate sub-agent invocations — one per dispatch. No exceptions. No "just this once." No "it's a simple deck."
+
+## Configuration (.mtg-commander.yml)
+
+At pipeline start (after intake confirmation, before the pipeline banner), check the user's working directory for `.mtg-commander.yml`.
+
+**If absent:** Use all defaults. Output a one-line note: `No .mtg-commander.yml found — using defaults. Create one to customize loop caps, price goals, and escalation.`
+
+**If present:** Validate keys against the schema below. Apply overrides for recognized keys. Use defaults for any missing keys. Warn on invalid or unrecognized keys (list their names) but NEVER fail the pipeline due to config. A parse-failure (invalid YAML) also warns and falls back to all defaults.
+
+**Status line** (shown after intake, before banner):
+- Config loaded: `Config loaded from .mtg-commander.yml (version 1)`
+- Config absent: `No .mtg-commander.yml found — using defaults.`
+
+### Schema (version 1)
+
+```yaml
+version: 1                    # schema version — required for future migrations
+loops:
+  deck_builder: 2             # max adversarial loop iterations for Deck Builder/Challenger
+  rules_judge: 2              # max adversarial loop iterations for Rules Judge/Challenger
+  optimizer: 2                # max adversarial loop iterations for Optimization/Challenger
+  price_evaluator: 2          # max adversarial loop iterations for Price/Challenger
+correction:
+  max_cycles: 3               # max Deck Builder correction cycles per pipeline run (default 3)
+price_rules:
+  max_card_price: null         # soft per-card goal in USD; null = no goal (15% hard cap still applies)
+  escalation: true             # true = escalate unsubstitutable over-goal cards to user; false = auto-substitute silently
+  budget_source: higher        # higher | tcgplayer | cardkingdom — which vendor total to use for budget check
+escalation:
+  on_loop_exhaustion: warn     # warn | block | best-effort — behavior when adversarial loop cap is reached without PASS
+audit:
+  period: ONE_YEAR             # ONE_MONTH | THREE_MONTHS | SIX_MONTHS | ONE_YEAR — EDHTop16 window
+  min_event_size: 0            # 0 = all events; 50 for serious competitive analysis
+  top_decks: 8                 # top-finishing decklists to diff against
+  new_card_since: null         # YYYY-MM-DD first-printing cutoff; null = 12 months back
+```
+
+### Defaults
+
+All keys above show their default values. Missing file = all defaults. Partial file = stated values override defaults, unstated keys use defaults. Unknown keys = warned and ignored.
+
+### Validation Rules
+
+- `version` must be `1` (integer). Other values: warn, use defaults.
+- `loops.*` must be positive integers >= 1. Invalid: warn, use default (2).
+- `price_rules.max_card_price` must be null or a positive number. Invalid: warn, use null.
+- `price_rules.escalation` must be boolean. Invalid: warn, use true.
+- `price_rules.budget_source` must be one of `higher`, `tcgplayer`, `cardkingdom`. Invalid: warn, use `higher`.
+- `escalation.on_loop_exhaustion` must be one of `warn`, `block`, `best-effort`. Invalid: warn, use `warn`.
+- `correction.max_cycles` must be a positive integer >= 1. Invalid: warn, use default (3).
+- `audit.period` must be one of `ONE_MONTH`, `THREE_MONTHS`, `SIX_MONTHS`, `ONE_YEAR`. Invalid: warn, use `ONE_YEAR`.
+- `audit.min_event_size` must be a non-negative integer. Invalid: warn, use 0.
+- `audit.top_decks` must be a positive integer <= 20. Invalid: warn, use 8.
+- `audit.new_card_since` must be null or a `YYYY-MM-DD` date. Invalid: warn, use null.
+
+---
+
+## Required Setup
+
+All network access goes through the scripts in `scripts/` (Python stdlib `urllib`), run via the Bash tool — no WebFetch allowlist or provider-side domain permissions are involved. Nothing to configure before first use.
+
+Network dependencies:
+
+| Script | Hosts | Notes |
+|---|---|---|
+| `card_lookup.py` | api.scryfall.com, archidekt.com | Scryfall requires both `User-Agent` and `Accept` headers |
+| `deck_sources.py` | api2.moxfield.com, archidekt.com, r.jina.ai | Moxfield is Cloudflare-protected; Jina reader is a fallback for public/unlisted decks |
+| `meta_sources.py` | cedhstats.org, edhtop16.com | HTML scrapers; parsers degrade to warnings rather than crashing |
+| `audit_compare.py` | api.scryfall.com | Paginated bulk queries plus a local printing cache under `~/.cache/mtg-commander/` |
+
+Scryfall rate-limits aggressively. `audit_compare.py` paces requests and backs off on 429, but do not run several audits concurrently — they will starve each other.
+
+## Overview
+
+**Build mode** orchestrates four sub-agents through a sequential pipeline:
+
+1. **Deck Builder** -- Intake, commander validation, synergy-first card selection
+2. **Rules Judge** -- Format legality validation (100 cards, color identity, banned list, singleton)
+3. **Optimization Reviewer** -- Synergy density, structural minimums, mana curve analysis
+4. **Price Evaluator** -- Budget compliance, per-card caps, live Scryfall pricing
+
+The pipeline self-corrects: when an agent returns FAIL, violations route back to the Deck Builder for correction. Max correction cycles are governed by the `correction.max_cycles` key in `.mtg-commander.yml` (default: 3).
+
+**Audit mode** runs a shorter sequence against an existing deck — ingest, fetch
+tournament data, compare, report. See [Audit Mode](#audit-mode) below. It does
+not use the 4-agent build pipeline; its value comes from the deterministic
+comparison scripts plus disciplined interpretation of correlational data.
+
+---
+
+## Card Lookup Utility
+
+All agents use `card_lookup.py` via the Bash tool for Scryfall API access:
+
+```
+python ${SKILL_DIR}/scripts/card_lookup.py validate --name "Sol Ring"
+python ${SKILL_DIR}/scripts/card_lookup.py search --query "oracle:sacrifice type:creature id:B legal:commander"
+python ${SKILL_DIR}/scripts/card_lookup.py batch --names "Sol Ring" "Dark Ritual" "Cabal Coffers"
+python ${SKILL_DIR}/scripts/card_lookup.py price --name "Sol Ring"
+python ${SKILL_DIR}/scripts/card_lookup.py batch-price --names "Sol Ring" "Dark Ritual"
+python ${SKILL_DIR}/scripts/card_lookup.py ck-price --name "Sol Ring"
+python ${SKILL_DIR}/scripts/card_lookup.py ck-batch-price --names "Sol Ring" "Dark Ritual" "Phyrexian Arena"
+python ${SKILL_DIR}/scripts/card_lookup.py random-commander --colors BG --strategy sacrifice
+python ${SKILL_DIR}/scripts/card_lookup.py validate-deck --commander "Karlov of the Ghost Council" --cards "Sol Ring" "Sejiri Refuge" "Dark Ritual"
+```
+
+### Audit-mode scripts
+
+Audit mode adds three scripts. They emit JSON and keep deck boards separate —
+never flatten commanders, mainboard, and maybeboard into one list.
+
+```
+python ${SKILL_DIR}/scripts/deck_sources.py moxfield --id <publicId>
+python ${SKILL_DIR}/scripts/deck_sources.py archidekt --id <numericId>
+python ${SKILL_DIR}/scripts/deck_sources.py file --path deck.txt
+
+python ${SKILL_DIR}/scripts/meta_sources.py cedhstats --commanders "A" "B"
+python ${SKILL_DIR}/scripts/meta_sources.py edhtop16 --commanders "A" "B" \
+    --period ONE_YEAR --min-size 0 --top-decks 8
+
+python ${SKILL_DIR}/scripts/audit_compare.py \
+    --deck deck.json --cedh cedh.json --edhtop edh.json --since 2025-01-01
+```
+
+`card_lookup.py validate-deck` validates against one commander. For a partner
+pair, validate each card against the union by passing the larger-identity half
+and then re-checking cards that carry colors unique to the other half.
+
+---
+
+## Intake Flow
+
+When a user requests a Commander deck, extract the 7 intake parameters. Detect which intake mode applies based on the user's first message.
+
+### Mode Detection
+
+**Mode A (Full Inline)**: The user provides all or most parameters in one message. Extract all 7 parameters, confirm what was found, and proceed directly to the pipeline.
+
+**Mode B (Partial Inline)**: The user provides some parameters. Extract what is given, then ask for the remaining parameters one at a time. Each answer can inform the next question's context.
+
+**Mode C (Guided)**: The user provides no parameters or asks for help. Walk through all 7 questions sequentially.
+
+### The 7 Intake Parameters
+
+| # | Parameter | Smart Behavior | Default |
+|---|-----------|---------------|---------|
+| 1 | Color identity | If user names a commander first, derive from commander | None (must specify or name commander) |
+| 2 | Commander name | If color identity given, offer 3 suggestions filtered by color + strategy | None (must specify or request suggestions) |
+| 3 | Strategy archetype | Infer from commander if possible | Inferred from commander's typical builds |
+| 4 | Power level (1-10) | Describe the scale in plain language | 6 ("focused casual") |
+| 5 | Meta alignment | Adapt description to power level answer | "Casual" if <= 5, "Mid-power" if 6-7, "High-power" if 8+ |
+| 6 | Total budget (USD) | Warn if budget is very low for the commander's color count | None (must specify) |
+| 7 | Card restrictions | Prompt with examples: must-include, must-exclude, per-card cap, no infinite combos | None |
+
+Load `references/intake-questions.md` for the full question text, valid ranges, and validation rules.
+
+### Power Level Scale (show on first use or when user asks)
+
+```
+Power level guide:
+  1-3  Jank / theme decks — winning is secondary to the bit
+  4-5  Casual — clear strategy, no fast combos, games go 8+ turns
+  6-7  Focused — tuned strategy, efficient cards, games go 5-8 turns
+  8-9  High power — optimized lists, fast combos possible, interaction-heavy
+  10   cEDH — competitive, combo wins, stax, fast mana, free counters
+```
+
+### Commander Validation (at intake, before pipeline)
+
+After the user names a commander, validate it before proceeding. Run these checks in order:
+
+**Step 1: Scryfall lookup**
+
+```bash
+python ${SKILL_DIR}/scripts/card_lookup.py validate --name "<commander_name>"
+```
+
+- If `found: false` and `did_you_mean` is present: show "Did you mean: <suggestion>?" and ask the user to confirm or correct.
+- If `found: false` and no suggestion: show "Commander not found" and ask for a different name.
+
+**Step 2: Banned list check**
+
+Check if the commander appears in `references/banned-list.md`. If banned:
+
+```
+Commander banned: <name>
+<Ban reason if known>
+Please choose a different commander.
+```
+
+**Step 3: Color identity cross-check**
+
+Derive color identity from Scryfall's `color_identity` field. If the user also specified colors and they conflict:
+
+```
+Note: You specified "<user colors>" but <commander>'s color identity is <actual colors>.
+
+Options:
+  1. Keep <commander> — deck will be <actual colors>
+  2. Choose a different commander within <user colors>
+
+Which would you prefer?
+```
+
+Never silently override the user. Surface conflicts, present options, let the user decide.
+
+**Step 4: Partner resolution**
+
+If the card's `keywords` array contains "Partner", "Partner with", "Choose a
+Background", or "Friends forever", the deck has **two commanders**:
+
+- Deck size is still exactly 100, so the rest of the deck is **98 cards**.
+- Color identity is the **union** of both commanders' identities.
+- Commander tax and commander damage are tracked separately per commander.
+- "Partner with <name>" fixes the pair; plain "Partner" leaves it open. Resolve
+  which pairing the user wants before proceeding.
+
+Validate both cards, then state the combined identity back to the user:
+
+```
+Partner commanders confirmed:
+  <A>  (<identity A>)
+  <B>  (<identity B>)
+  Combined color identity: <union>
+  Deck builds 98 other cards.
+```
+
+For **audit mode**, the pair also defines the meta lookup: pass both names to
+`meta_sources.py --commanders "<A>" "<B>"`. Site pairing order varies — see
+`references/audit-guide.md` §3.
+
+If only one half of a pair is named in build mode, ask for the partner rather
+than guessing; the partner changes both the color identity and the game plan.
+
+### Commander Recommendation Flow
+
+When the user asks for suggestions instead of naming a commander, load `references/archetype-patterns.md` and provide 3 commander suggestions filtered by color identity and strategy. After the user picks one, validate it via Scryfall as above.
+
+### Budget Warning at Intake
+
+If the budget seems too tight for the color count (e.g., $30 for a 4-color deck), warn the user before starting the pipeline:
+
+```
+Budget concern: $<amount> may be too tight for a <N>-color Commander deck.
+
+Options:
+  1. Proceed anyway — I'll build the best deck possible at this budget
+  2. Increase budget
+  3. Reduce colors
+
+What would you prefer?
+```
+
+General thresholds: 1 color < $25, 2 colors < $35, 3 colors < $50, 4+ colors < $60.
+
+### Intake Confirmation
+
+After all 7 parameters are resolved, display a confirmation block:
+
+```
+Deck intake — confirmed:
+
+  Commander:      <name>
+  Color Identity: <colors> (derived from commander)
+  Strategy:       <archetype>
+  Power Level:    <N>
+  Meta:           <alignment>
+  Budget:         $<amount>
+  Restrictions:   <restrictions or "None">
+
+Proceeding to deck construction.
+```
+
+---
+
+## Audit Mode
+
+Audit mode evaluates a deck that already exists. It is lighter than the build
+pipeline: three scripted data steps, then analysis. Load
+[`references/audit-guide.md`](references/audit-guide.md) before starting — it
+defines the evidence hierarchy, the reporting format, and the rules for what
+not to recommend cutting.
+
+### Audit intake
+
+Extract what you can from the message; ask only for what is missing.
+
+| Input | Source | Default |
+|---|---|---|
+| Deck | URL, pasted list, or file | Required |
+| Goal | The user's own words ("top cut a 10K", "beat my local meta") | General optimization |
+| Time window | Explicit, or infer from goal | `ONE_YEAR`; `THREE_MONTHS` if the goal is about the current meta |
+| Event size floor | Explicit, else infer | `0` (all). Use `50` for serious competitive goals |
+| Budget | Explicit | None (report prices, don't filter) |
+| Scope | `full`, `new-cards`, `mana`, `interaction` | `full` |
+
+Confirm in one line, then run. Audit intake is deliberately short — the user
+already has a deck and wants an answer, not a questionnaire.
+
+### Audit steps
+
+**1. Ingest.** Keep boards separate.
+
+```bash
+python ${SKILL_DIR}/scripts/deck_sources.py moxfield --id <id>
+python ${SKILL_DIR}/scripts/deck_sources.py archidekt --id <id>
+python ${SKILL_DIR}/scripts/deck_sources.py file --path <path>
+```
+
+If `deck_total` is not 100, stop and resolve it. If `warnings` reports
+multiple copies outside basics or no commanders, surface that before analysis.
+
+**2. Tournament data.** Pass both names for partner pairs.
+
+```bash
+python ${SKILL_DIR}/scripts/meta_sources.py cedhstats --commanders "<A>" "<B>"
+python ${SKILL_DIR}/scripts/meta_sources.py edhtop16 --commanders "<A>" "<B>" \
+    --period ONE_YEAR --min-size 0 --top-decks 8
+```
+
+If either site returns `error`, say so plainly and continue with what you have.
+Never present an empty result as "no data exists" — distinguish "site had no
+record" from "fetch failed."
+
+**3. Compare.**
+
+```bash
+python ${SKILL_DIR}/scripts/audit_compare.py \
+    --deck deck.json --cedh cedh.json --edhtop edh.json --since <YYYY-MM-DD>
+```
+
+`--since` should be 12–18 months back unless the user asks for a shorter new-card
+window. Quote these tables rather than recomputing figures in prose.
+
+**4. Analyze and report.** Follow `references/audit-guide.md` §6–§9:
+
+- Classify: tune (≥60 of 100 cards in the top-list core), rework (40–59), or
+  rebuild (<40).
+- Rank cuts by evidence against, then apply the do-not-cut overrides.
+- Pair each cut with an add and a **mechanical** reason.
+- Separate high-confidence swaps from tests.
+- Screen new cards by first printing and report adoption honestly.
+- State sample sizes, filters, and the pull date.
+
+### Audit output
+
+Use the report structure in `references/audit-guide.md` §9. Do not emit the
+build pipeline's game-plan/category/price sections — an audit's deliverable is
+a swap sheet and the reasoning behind it.
+
+If the user wants the audit written up for later use, write a Markdown file into
+the working directory with a header naming all three data sources and the pull
+date.
+
+### Audit guardrails
+
+- Never recommend a cut without naming the replacement and the reason.
+- Never merge maybeboard or sideboard cards into the deck.
+- Never cite a percentage you did not get from the scripts.
+- Never apply cEDH tournament data to a bracket 1–3 deck; run structural checks
+  only and say why.
+- If the user's deck is already well-positioned, say so. "Six swaps and you're
+  current" is a complete and useful answer.
+
+---
+
+## Agent Pipeline
+
+After intake, execute the 4-agent pipeline. Display a pipeline banner:
+
+```
+Pipeline started — 4 agents will process your deck.
+
+  [1/4] Deck Builder ........... constructing 100-card list
+  [2/4] Rules Judge ............ pending
+  [3/4] Optimization Reviewer .. pending
+  [4/4] Price Evaluator ........ pending
+
+Estimated time: 2-4 minutes (depends on Scryfall API response times)
+```
+
+### Pipeline State
+
+Track the following state through the pipeline:
+
+- **Intake parameters**: All 7 resolved parameters
+- **Deck state**: The current 100-card deck list (output of Deck Builder, updated by corrections)
+- **Correction counter**: Starts at 0, incremented on each correction cycle. Max from `correction.max_cycles` in `.mtg-commander.yml` (default: 3).
+- **Agent verdicts**: Accumulated PASS/FAIL verdicts from each agent
+- **Budget-relaxed cards**: Cards whose synergy threshold was relaxed to 2 due to budget constraints
+
+### Reference File Loading
+
+Before spawning each agent, read the reference files it needs using the Read tool:
+
+| Agent | Reference Files to Load |
+|-------|------------------------|
+| Deck Builder | `references/archetype-patterns.md`, `references/synergy-taxonomy.md`, `references/structural-minimums.md`, `references/intake-questions.md` |
+| Rules Judge | `references/commander-rules.md`, `references/banned-list.md`, `references/rules-judge-guide.md` |
+| Optimization Reviewer | `references/optimizer-guide.md`, `references/synergy-taxonomy.md`, `references/structural-minimums.md` |
+| Price Evaluator | `references/price-evaluator-guide.md`, `references/api-reference.md` |
+
+All paths are relative to `${SKILL_DIR}` — the skill's own directory (the `mtg-commander/` folder containing this `SKILL.md`; resolve it to an absolute path at dispatch time and pass that path to each sub-agent).
+
+---
+
+### Agent 1: Deck Builder
+
+Spawn a sub-agent with the following prompt template. Read the 4 reference files listed above and include their contents in the prompt.
+
+```
+AGENT PROMPT TEMPLATE — DECK BUILDER
+=====================================
+
+You are an expert MTG Commander deck builder. You specialize in synergy-first
+card selection — every non-land card must interact meaningfully with 3+ other
+cards in the deck.
+
+## Reference Knowledge
+
+[INSERT CONTENTS OF references/archetype-patterns.md]
+
+---
+
+[INSERT CONTENTS OF references/synergy-taxonomy.md]
+
+---
+
+[INSERT CONTENTS OF references/structural-minimums.md]
+
+---
+
+[INSERT CONTENTS OF references/intake-questions.md]
+
+---
+
+## Your Task
+
+{TASK_BLOCK}
+
+Where {TASK_BLOCK} is one of:
+
+### For Initial Build:
+
+Construct a 100-card Commander deck with these parameters:
+
+  Commander:      {commander_name}
+  Color Identity: {color_identity}
+  Strategy:       {strategy}
+  Power Level:    {power_level}
+  Meta:           {meta}
+  Budget:         ${budget}
+  Restrictions:   {restrictions}
+
+### For Correction Cycle:
+
+Apply the following corrections to the current decklist while maintaining
+exactly 100 cards. For each violation, use the suggested replacement if
+suitable, or find an alternative that satisfies the same constraint.
+
+Current deck state:
+{current_deck_state}
+
+Violations to resolve:
+{violation_list}
+
+{If budget-forced corrections: "Budget takes priority. Synergy threshold
+is relaxed to 2 interactions for cards replaced due to budget constraints.
+Tag these cards with [BUDGET_RELAXED]."}
+
+---
+
+## Card Lookup
+
+You MUST validate every card name before including it. Use the Bash tool:
+
+  python ${SKILL_DIR}/scripts/card_lookup.py validate --name "<card name>"
+  python ${SKILL_DIR}/scripts/card_lookup.py search --query "<scryfall query>"
+  python ${SKILL_DIR}/scripts/card_lookup.py batch --names "<card1>" "<card2>" ...
+
+Do NOT include any card that fails name validation.
+
+For finding cards by function, use search with Scryfall syntax:
+  oracle:<text>    — search oracle text
+  type:<type>      — search type line
+  id:<colors>      — filter by color identity (e.g., id:B for mono-black)
+  legal:commander  — only Commander-legal cards
+  usd:<price       — price filter
+
+## Output Format
+
+Produce your output in this exact structure:
+
+DECK_STATE:
+  commander: <exact Scryfall name>
+  color_identity: [<colors>]
+  strategy: <archetype>
+  power_level: <1-10>
+  meta: <alignment>
+  budget: <USD>
+  per_card_cap: <USD or "15% of budget">
+  restrictions:
+    must_include: [<cards>]
+    must_exclude: [<cards>]
+    no_infinite_combos: <true/false>
+
+GAME_PLAN: <2-3 sentences describing the deck's primary game plan>
+
+CARDS:
+  - name: <exact Scryfall name>
+    category: <Commander|Ramp|Card Draw|Removal|Board Wipes|Win Conditions|Synergy Pieces|Lands>
+    mana_cost: <{1}{B}{B} notation>
+    synergy_rationale: <one sentence explaining why this card is in the deck>
+    synergy_tags: [TRIGGERS: <card>, ENABLES: <card>, ...]
+    price_usd: <from Scryfall or null>
+  [... exactly 99 more entries for 100 total ...]
+
+## Category Assignment Rule
+
+When a card serves multiple categories, assign it to the category with the
+greatest structural deficit (furthest below its minimum). If no deficit exists,
+assign by primary function relative to the strategy archetype.
+
+## Structural Minimums
+
+Consult the structural-minimums reference for targets by power level. Ensure:
+- Ramp: 10+ sources
+- Card Draw: 10+ sources
+- Removal: 5+ targeted removal
+- Board Wipes: 2+ board wipes
+- Win Conditions: 3+ win conditions
+- Lands: 34-40
+
+## Critical Rules
+
+1. Exactly 100 cards including the commander.
+2. Every non-land card must have synergy_tags with 3+ interactions from the
+   6 taxonomy categories (Triggers, Enables, Protects, Combos-with, Amplifies, Feeds).
+3. Validate ALL card names via card_lookup.py before including them.
+4. Use the category disambiguation rule for multi-function cards.
+5. Document the game plan in 2-3 sentences.
+```
+
+**After the Deck Builder agent returns**, extract the deck state from its output. Verify it contains exactly 100 cards. Display progress:
+
+```
+[1/4] Deck Builder — COMPLETE (100 cards constructed)
+```
+
+---
+
+### Agent 2: Rules Judge
+
+Spawn a sub-agent with the following prompt template. Read `references/commander-rules.md`, `references/banned-list.md`, and `references/rules-judge-guide.md` and include their contents.
+
+```
+AGENT PROMPT TEMPLATE — RULES JUDGE
+=====================================
+
+You are a Commander format rules judge. Your role is to validate format
+legality with zero tolerance for errors. You make no creative decisions —
+pure rules enforcement. All legality decisions must be deterministic, based
+on Scryfall data, never AI-inferred.
+
+## Reference Knowledge
+
+[INSERT CONTENTS OF references/commander-rules.md]
+
+---
+
+[INSERT CONTENTS OF references/banned-list.md]
+
+---
+
+[INSERT CONTENTS OF references/rules-judge-guide.md]
+
+---
+
+## Your Task
+
+Read `references/rules-judge-guide.md` for your validation checklist.
+
+Validate the following decklist for Commander format legality.
+
+{deck_state}
+
+## Validation Checks
+
+Perform ALL of these checks. Use the Bash tool to call card_lookup.py:
+
+### Check 1: Card Count
+Count the total cards in the decklist. Must be exactly 100 (including commander).
+
+### Check 2: Card Name Verification
+Validate ALL card names exist in Scryfall using batch lookup:
+
+  python ${SKILL_DIR}/scripts/card_lookup.py batch --names "<card1>" "<card2>" ...
+
+Split into batches of 75 cards. Every card must be found. Zero tolerance for
+hallucinated names.
+
+### Check 3: Color Identity + Check 4: Banned List + Check 6: Format Legality
+Run the `validate-deck` command to programmatically verify color identity,
+format legality, and banned list compliance for ALL cards at once:
+
+  python ${SKILL_DIR}/scripts/card_lookup.py validate-deck --commander "<commander_name>" --cards "<card1>" "<card2>" ... "<card99>"
+
+Check the `violations` array in the output. Each violation includes a `type`
+field: `color_identity`, `format_legality`, `banned`, or `not_found`.
+
+CRITICAL: Never rely on your knowledge of card color identities or ban status.
+Always verify via the `validate-deck` API command. LLM training data is
+unreliable for card attributes.
+
+### Check 5: Singleton Rule
+No duplicate card names except basic lands (Plains, Island, Swamp, Mountain, Forest).
+
+### Check 7: Synergy Audit
+For each synergy claim in `synergy_rationale` and `synergy_tags`, verify the
+claimed interaction is mechanically possible based on the card's oracle text
+from Scryfall. Example: if a card is tagged [TRIGGERS: Blood Artist] via
+"creature death", its oracle text must reference creature death triggers.
+
+## Output Format
+
+RULES_JUDGE_VERDICT: PASS|FAIL
+
+CHECKS:
+  card_count: <N>/100
+  names_verified: <N>/100
+  color_identity: <N>/100
+  banned_cards: <N> found
+  singleton: PASS|FAIL
+  format_legality: <N>/100
+  synergy_audit: <N> false claims
+
+VIOLATIONS: (only present if FAIL)
+  - card: <name>
+    rule: <which check failed — Card Name / Color Identity / Banned / Singleton / Format Legality / Synergy Audit>
+    detail: <explanation of the violation>
+    suggested_replacement: <a legal card that fills the same role>
+```
+
+**After the Rules Judge agent returns**, parse the verdict.
+
+- If **PASS**: Display `[2/4] Rules Judge — PASS (all checks clear)` and proceed to Agent 3.
+- If **FAIL**: Enter the correction cycle (see Correction Cycles below).
+
+---
+
+### Agent 3: Optimization Reviewer
+
+Spawn a sub-agent. Read `references/optimizer-guide.md` for the full evaluation process, then read `references/synergy-taxonomy.md` and `references/structural-minimums.md` and include their contents.
+
+```
+AGENT PROMPT TEMPLATE — OPTIMIZATION REVIEWER
+===============================================
+
+You are an MTG Commander deck optimization reviewer. You enforce synergy-first
+philosophy and structural soundness. Your role: verify that every non-land card
+earns its slot through meaningful interactions, and that the deck's structure
+meets minimum thresholds for its power level.
+
+## Reference Knowledge
+
+[INSERT CONTENTS OF references/synergy-taxonomy.md]
+
+---
+
+[INSERT CONTENTS OF references/structural-minimums.md]
+
+---
+
+## Your Task
+
+Evaluate the following decklist for synergy density and structural soundness.
+
+{deck_state}
+
+{If budget_relaxed_cards exist: "The following cards were included due to budget
+constraints and have a relaxed synergy threshold of 2 interactions (instead of 3):
+{budget_relaxed_card_list}"}
+
+## Evaluation Steps
+
+### Step 1: Synergy Tag Validation
+For every non-land card, read its `synergy_tags`. Verify each tag matches one
+of the 6 taxonomy categories (Triggers, Enables, Protects, Combos-with,
+Amplifies, Feeds). Discard invalid tags.
+
+### Step 2: Interaction Counting
+Count valid interactions per non-land card. Flag any card with fewer than 3
+interactions as "isolated" (or fewer than 2 if it appears in the budget-relaxed
+list).
+
+### Step 3: Structural Minimums
+Validate category counts against the structural minimums for power level {power_level}:
+- Ramp: 10+
+- Card Draw: 10+
+- Removal: 5+
+- Board Wipes: 2+
+- Win Conditions: 3+
+- Lands: 34-40
+
+### Step 4: Mana Curve
+Compute the mana curve distribution across these buckets: 0-1, 2, 3, 4, 5, 6, 7+.
+Flag if the curve is front-loaded or top-heavy relative to the strategy archetype.
+
+### Step 5: Deck Synergy Score
+Calculate: (total synergy connections across all non-land cards) / (number of non-land cards).
+Target: >= 3.0.
+
+### Step 6: Replacement Suggestions
+For each isolated card, use the Bash tool to find 1-2 replacements:
+
+  python ${SKILL_DIR}/scripts/card_lookup.py search --query "oracle:<relevant_text> id:<colors> legal:commander"
+
+Suggest cards that would have 3+ interactions with existing cards in the deck.
+
+## Output Format
+
+OPTIMIZATION_VERDICT: PASS|FAIL
+
+SYNERGY_SCORE: <decimal>
+ISOLATED_CARDS: <count>
+
+STRUCTURAL_CHECKS:
+  ramp: <N>/<min> PASS|FAIL
+  card_draw: <N>/<min> PASS|FAIL
+  removal: <N>/<min> PASS|FAIL
+  board_wipes: <N>/<min> PASS|FAIL
+  win_conditions: <N>/<min> PASS|FAIL
+  lands: <N> PASS|FAIL (range: 34-40)
+
+MANA_CURVE:
+  0-1: <count>
+  2:   <count>
+  3:   <count>
+  4:   <count>
+  5:   <count>
+  6:   <count>
+  7+:  <count>
+  assessment: <healthy / front-loaded / top-heavy + explanation>
+
+TOP_SYNERGY_CARDS:
+  <card_name> — <N> interactions (<categories involved>)
+  [top 3-5 most connected cards]
+
+ISOLATED_CARD_DETAILS: (only present if FAIL)
+  - card: <name>
+    interactions: <N>
+    current_tags: [<existing tags>]
+    suggested_replacements:
+      - <replacement_name> (<N> interactions: <list of interactions>)
+      - <replacement_name> (<N> interactions: <list of interactions>)
+
+STRUCTURAL_VIOLATIONS: (only present if FAIL)
+  - category: <name>
+    current: <N>
+    minimum: <N>
+    suggested_additions: [<card names to add to reach minimum>]
+```
+
+**After the Optimization Reviewer agent returns**, parse the verdict.
+
+- If **PASS**: Display `[3/4] Optimization Reviewer — PASS (synergy: {score}, structure: valid)` and proceed to Agent 4.
+- If **FAIL**: Enter the correction cycle.
+
+---
+
+### Agent 4: Price Evaluator
+
+Spawn a sub-agent. Read `references/price-evaluator-guide.md` for the full evaluation process, then read `references/api-reference.md` and include their contents.
+
+```
+AGENT PROMPT TEMPLATE — PRICE EVALUATOR
+=========================================
+
+You are an MTG card price evaluator. You enforce budget compliance using live
+Scryfall pricing data. Your role: verify the deck meets the user's budget
+constraint with real market prices.
+
+## Reference Knowledge
+
+[INSERT CONTENTS OF references/price-evaluator-guide.md]
+
+---
+
+[INSERT CONTENTS OF references/api-reference.md]
+
+---
+
+## Your Task
+
+Evaluate the following decklist for budget compliance.
+
+{deck_state}
+
+Budget: ${budget}
+Per-card cap: ${per_card_cap} (explicit cap if user specified one, otherwise 15% of budget)
+
+## Evaluation Steps
+
+### Step 1: Fetch TCGPlayer Prices
+Use batch pricing for all 100 cards:
+
+  python ${SKILL_DIR}/scripts/card_lookup.py batch-price --names "<card1>" "<card2>" ...
+
+Split into batches of 75 cards. Use cheapest available printing for each card.
+
+### Step 1b: Fetch Card Kingdom Prices
+After TCGPlayer pricing, fetch CK prices via Archidekt:
+
+  python ${SKILL_DIR}/scripts/card_lookup.py ck-batch-price --names "<card1>" "<card2>" ... "<card100>"
+
+Merge CK prices into card data. Show both vendor prices in output.
+
+### Step 2: Handle Null Prices
+If a card has no USD price: the card_lookup.py script tries usd_foil and other
+printings automatically. If still null, flag as "price unavailable" and exclude
+from budget calculation with a warning.
+
+### Step 3: Calculate Total
+Sum TCGPlayer total and Card Kingdom total separately. Budget check uses the
+HIGHER of the two totals (conservative). Display both in output:
+"TCGPlayer: $X | Card Kingdom: $Y"
+
+### Step 4: Per-Card Cap
+Check each card against the per-card cap. If no explicit cap was specified by
+the user, apply a default cap of 15% of the total budget.
+
+### Step 5: Replacement Suggestions
+For each over-budget or over-cap card, find 1-2 budget-friendly alternatives:
+
+  python ${SKILL_DIR}/scripts/card_lookup.py search --query "oracle:<similar_effect> id:<colors> legal:commander usd:<price_cap>"
+
+Prioritize replacements that maintain synergy (check the card's synergy_tags
+and find alternatives that could fill similar interaction roles).
+
+### Step 5b: Per-Card Price Goal Escalation
+
+If `price_rules.max_card_price` is set in `.mtg-commander.yml` (non-null):
+
+1. **Identify over-goal cards** — after pricing all cards, scan for any card whose price (using the `budget_source` vendor) exceeds the soft goal.
+2. **Attempt substitution first** — for each over-goal card, search for a synergy-preserving, format-legal alternative under the goal price. The substitute must maintain the card's category role and have >= 3 interactions (or >= 2 if replacing a `[BUDGET_RELAXED]` card).
+3. **Group unsubstitutable cards** — cards where no acceptable substitute exists are grouped into a BLOCKING escalation prompt.
+4. **Escalation message format:**
+
+```
+PRICE GOAL EXCEEDED — user decision required
+
+The following cards exceed your per-card goal of $<goal> and have no
+synergy-preserving substitute under the goal:
+
+| Card | Price | Role | Why No Substitute |
+|------|-------|------|-------------------|
+| <name> | $<price> | <category> | <reason: e.g., unique combo piece, only card with this effect in color> |
+| ... | ... | ... | ... |
+
+Options:
+  (a) Accept exception — card(s) included at current price (logged in PRICE_EXCEPTIONS)
+  (b) Raise goal to $<suggested_new_goal> — re-evaluate with higher threshold
+  (c) Force budget-relaxed swap — accept best available substitute even if synergy drops below threshold
+```
+
+5. **Pipeline BLOCKS** until the user responds. No timeout. No auto-accept. No proceeding without resolution.
+6. **Logging** — user-approved exceptions are documented in a `PRICE_EXCEPTIONS` section in the final deck output:
+
+```
+PRICE_EXCEPTIONS:
+  - card: <name>
+    price: $<price>
+    goal: $<goal>
+    user_decision: accepted | goal_raised | force_swapped
+    reason: <user's stated reason or "no reason given">
+```
+
+**When `price_rules.escalation` is false:** Auto-substitute via budget-wins logic. If no substitute exists, include the card silently with a metadata note `[OVER_GOAL: $<price>/$<goal>]` in the deck output. No user prompt.
+
+**Separation from hard cap:** This soft goal is entirely separate from the existing 15%-of-budget per-card hard cap. The hard cap still applies independently. A card can pass the soft goal but fail the hard cap (or vice versa).
+
+### Step 6: Category Breakdown
+Group card prices by category and report subtotals.
+
+## Output Format
+
+PRICE_VERDICT: PASS|FAIL
+
+TOTAL_COST: $<amount>
+BUDGET: $<amount>
+REMAINING: $<amount> (under budget) | OVER_BY: $<amount>
+PER_CARD_CAP: $<amount>
+CAP_VIOLATIONS: <count>
+PRICE_UNAVAILABLE: <count> cards (if any)
+
+CATEGORY_BREAKDOWN:
+  Commander:       $<amount>
+  Ramp:            $<amount>
+  Card Draw:       $<amount>
+  Removal:         $<amount>
+  Board Wipes:     $<amount>
+  Win Conditions:  $<amount>
+  Synergy Pieces:  $<amount>
+  Lands:           $<amount>
+
+MOST_EXPENSIVE:
+  1. <card_name>    $<price>
+  2. <card_name>    $<price>
+  3. <card_name>    $<price>
+
+VIOLATIONS: (only present if FAIL)
+  - card: <name>
+    issue: <OVER_BUDGET | OVER_CAP>
+    price: $<amount>
+    cap: $<amount> (for cap violations)
+    suggested_replacements:
+      - <name> ($<price>) — <brief note on functional similarity>
+      - <name> ($<price>) — <brief note on functional similarity>
+
+COST_REDUCTION_PLAN: (only present if FAIL and over budget)
+  Priority swaps (highest savings, lowest synergy impact):
+    <card> ($<price>) -> <replacement> ($<price>)   saves $<amount>
+    [... enough swaps to bring total under budget ...]
+  Projected total after swaps: $<amount>
+
+PRICING_NOTE:
+  TCGPlayer prices via Scryfall API. Card Kingdom prices via Archidekt API.
+  Prices as of <current_date>. Budget check uses the higher vendor total.
+  Verify final prices at your preferred vendor before purchasing.
+```
+
+**After the Price Evaluator agent returns**, parse the verdict.
+
+- If **PASS**: Display `[4/4] Price Evaluator — PASS (total: ${total} / ${budget} budget)` and proceed to Final Output.
+- If **FAIL**: Enter the correction cycle.
+
+---
+
+## Challenger Agents
+
+After each primary agent completes, spawn a dedicated challenger agent to independently verify that agent's output. Challengers receive the primary's output artifact and intake params only — NEVER the primary's internal reasoning trace.
+
+Each challenger MUST produce this signal:
+
+```
+CHALLENGER_VERDICT: PASS | CHALLENGE
+FINDINGS: <numbered list of issues found, or "None">
+SUMMARY: <one-sentence overall assessment>
+```
+
+### Deck Challenger (after Deck Builder)
+
+Re-counts total cards (MUST be exactly 100). Spot-checks 5 randomly selected synergy claims by fetching oracle text via `card_lookup.py validate` and verifying the claimed interaction is mechanically possible. Checks structural minimums (ramp >= 10, card draw >= 10, removal >= 5, board wipes >= 2, win conditions >= 3, lands 34-40). Flags obvious omissions for the stated strategy archetype.
+
+### Rules Challenger (after Rules Judge)
+
+Runs `validate-deck` programmatically against the full decklist — this is the SOLE legality verification mechanism (DEFECT-001 fix: never rely on LLM knowledge for color identity or ban status). Parses the `violations` array for `color_identity`, `format_legality`, and `banned` entries. Cross-checks 3 randomly selected cards' color identities via individual Scryfall lookups (`card_lookup.py validate`) to detect systematic drift.
+
+### Optimization Challenger (after Optimization Reviewer)
+
+Recalculates synergy score independently by counting valid taxonomy interactions (Triggers, Enables, Protects, Combos-with, Amplifies, Feeds) per non-land card. Identifies isolated cards with fewer than 3 interactions (or fewer than 2 for `[BUDGET_RELAXED]` cards). Validates mana curve assessment against actual CMC distribution from Scryfall data.
+
+### Price Challenger (after Price Evaluator)
+
+Fetches Card Kingdom prices independently via `ck-batch-price` (DEFECT-002 fix: independent price source prevents single-vendor drift). Flags per-card divergence exceeding 30% between TCGPlayer and CK prices. Flags total cost divergence exceeding 20% between vendors. Checks per-card price goal violations if `price_rules.max_card_price` is set in `.mtg-commander.yml`. Attempts substitution suggestions for flagged cards before escalating.
+
+---
+
+## Adversarial Loop Protocol
+
+When a challenger returns `CHALLENGE`, the adversarial loop engages. This loop is independent of the pipeline-level correction counter.
+
+### Loop Flow
+
+```
+Primary Agent (Task spawn)
+  -> output artifact
+  -> Challenger Agent (separate Task spawn, clean context)
+     -> PASS: advance to next pipeline step
+     -> CHALLENGE: spawn NEW primary agent with challenger findings
+        -> spawn NEW challenger agent to re-verify
+        -> repeat until PASS or loop cap reached
+```
+
+Each loop iteration spawns fresh agents. NEVER reuse a prior agent's context. Every spawn is a fresh sub-agent invocation (see Sub-Agent Dispatch Guardrail above).
+
+### Loop Cap
+
+The maximum adversarial loop iterations per step are configured in `.mtg-commander.yml`:
+
+```yaml
+loops:
+  deck_builder: 2    # default
+  rules_judge: 2
+  optimizer: 2
+  price_evaluator: 2
+```
+
+Missing config file = all defaults (2 per step). Missing key = default for that key.
+
+### Loop Exhaustion
+
+When the loop cap is reached without a `PASS` verdict, behavior is governed by `escalation.on_loop_exhaustion` in `.mtg-commander.yml`:
+
+- **`warn`** (default) — proceed with remaining findings logged as warnings in the final output
+- **`block`** — halt the pipeline and present unresolved findings to the user for manual resolution
+- **`best-effort`** — proceed silently, embed findings as metadata notes in the deck output
+
+### Visibility Format
+
+Display adversarial loop progress clearly:
+
+```
+[2/4] Rules Judge — COMPLETE
+  [2C] Rules Challenger — CHALLENGE (3 findings)
+    1. Card "Paradox Engine" — banned in Commander
+    2. Card "Chromatic Lantern" — color identity mismatch (has G, deck is B)
+    3. Synergy claim "triggers on sacrifice" — oracle text has no sacrifice reference
+
+  Adversarial loop 1/2: spawning corrected Rules Judge...
+
+[2/4] Rules Judge — re-validated
+  [2C] Rules Challenger — PASS
+    FINDINGS: None
+    SUMMARY: All legality checks verified independently.
+```
+
+The `[NC]` indicator (where N is the step number) marks challenger output to distinguish it from primary agent output.
+
+---
+
+## Correction Cycles
+
+When any agent returns FAIL:
+
+### Routing Logic
+
+1. Increment the correction counter.
+2. Check if max cycles reached (`correction.max_cycles` in `.mtg-commander.yml`, default: 3).
+3. If max NOT reached:
+   - Extract violations from the failing agent's verdict.
+   - Display correction cycle visibility (see below).
+   - Spawn a new Deck Builder sub-agent with the CORRECTION CYCLE task block (see Agent 1 template above), passing the current deck state and the violation list.
+   - After correction, re-enter the pipeline at the agent that failed (not from the beginning).
+4. If max IS reached:
+   - Apply budget priority rule: if budget and synergy conflict, budget wins. Relax synergy threshold to 2 interactions for budget-forced cards.
+   - Output the best-effort deck with remaining warnings.
+
+### Correction Visibility
+
+Display correction cycles clearly:
+
+```
+[<N>/4] <Agent Name> — FAIL (<count> violations found)
+
+  Correction cycle <cycle>/<max>:
+  Returning to Deck Builder with <count> violations to resolve.
+
+  Violations:
+    1. "<card>" — <violation description>
+       Suggested replacement: <replacement>
+    [...]
+
+[1/4] Deck Builder — applying corrections...
+  <swap descriptions>
+
+[1/4] Deck Builder — corrections applied (100 cards)
+
+[<N>/4] <Agent Name> — re-validating...
+```
+
+### Budget-Wins Tiebreaker
+
+When the Price Evaluator fails and budget-forced swaps reduce synergy:
+
+- The Deck Builder applies the cheaper replacements.
+- Budget-forced cards are tagged with `[BUDGET_RELAXED]`.
+- The Optimization Reviewer re-evaluates with a relaxed synergy threshold of 2 for those cards.
+- The output warns which cards were included at reduced synergy.
+
+### Max Cycles Exhausted
+
+```
+Correction cycles exhausted (<max>/<max>). Outputting best-effort deck.
+
+  REMAINING WARNINGS:
+    <numbered list of unresolved violations>
+
+  The deck below is the best result achievable within <max> correction
+  cycles. Consider adjusting your budget or strategy to resolve
+  remaining warnings.
+```
+
+---
+
+## Final Output
+
+After all agents pass (or max cycles exhausted), assemble the final output in this order:
+
+### Section 1: Summary Card
+
+```
+==============================================================
+  MTG COMMANDER DECK: <commander_name>
+  Strategy:    <strategy>
+  Colors:      <color_identity>
+  Power Level: <N> (<tier_name>)
+  Total Cost:  $<total> / $<budget> budget
+  Synergy:     <score> average interactions per card
+  Cards:       100 (1 commander + 99)
+==============================================================
+```
+
+### Section 2: Categorized Deck List
+
+Display the full deck grouped by category. Include price and synergy rationale for each non-land card:
+
+```
+--- Commander (1) --- Total: $<subtotal>
+  <card_name>  <mana_cost>  $<price>
+    <synergy_rationale>
+
+--- Ramp (<count>) --- Total: $<subtotal>
+  <card_name>  <mana_cost>  $<price>
+    <synergy_rationale>
+  [...]
+
+--- Card Draw (<count>) --- Total: $<subtotal>
+  [...]
+
+--- Removal (<count>) --- Total: $<subtotal>
+  [...]
+
+--- Board Wipes (<count>) --- Total: $<subtotal>
+  [...]
+
+--- Win Conditions (<count>) --- Total: $<subtotal>
+  [...]
+
+--- Synergy Pieces (<count>) --- Total: $<subtotal>
+  [...]
+
+--- Lands (<count>) --- Total: $<subtotal>
+  [land names, no synergy rationale needed]
+```
+
+### Section 3: Pipeline Results
+
+```
+--- Pipeline Results ---
+
+  Deck Builder:          100 cards constructed
+  Rules Judge:           <PASS/FAIL verdict summary>
+  Optimization Reviewer: <PASS/FAIL verdict summary with synergy score>
+  Price Evaluator:       <PASS/FAIL verdict summary with total cost>
+  Correction Cycles:     <used> used (max: <max>)
+```
+
+If any warnings exist (budget-relaxed cards, best-effort output):
+
+```
+  Warnings:
+    - <warning descriptions>
+```
+
+### Section 4: Export List
+
+A clean, copy-paste-ready list for Moxfield, Archidekt, MTGO:
+
+```
+--- Export List (copy-paste ready) ---
+
+1 <card_name>
+1 <card_name>
+[... one per line for all 100 cards ...]
+<N> <basic_land_name>
+```
+
+For basic lands, use quantity notation (e.g., `24 Swamp`).
+
+### Section 5: Purchase Summary
+
+```
+--- Purchase Info ---
+
+  Total deck cost: TCGPlayer: $<tcg_total> | Card Kingdom: $<ck_total>
+  Pricing sources: TCGPlayer via Scryfall API, Card Kingdom via Archidekt API
+  Prices as of:    <current_date>
+
+  Most expensive cards:
+    <card_name>    TCG: $<price>  CK: $<price>
+    <card_name>    TCG: $<price>  CK: $<price>
+    <card_name>    TCG: $<price>  CK: $<price>
+
+  Budget check used: $<higher_total> (higher of TCG/CK — conservative)
+  Verify final prices at your preferred vendor before purchasing.
+```
+
+### Section 6: Post-Output Actions
+
+```
+What would you like to do?
+
+  "approve"   — Save this deck (no further changes)
+  "swap X Y"  — Replace card X with card Y (re-runs validation)
+  "rerun"     — Start the pipeline over with the same intake answers
+  "adjust"    — Change intake parameters (budget, power level, etc.)
+               and rebuild
+```
+
+---
+
+## Post-Output Action Handling
+
+### approve
+Acknowledge completion. No further action.
+
+### swap X Y
+When the user requests a card swap:
+
+1. Validate the new card via `card_lookup.py validate`.
+2. Check color identity against the commander.
+3. Check banned list.
+4. Fetch price via `card_lookup.py price`.
+5. Apply the swap to the deck state.
+6. Spawn the Optimization Reviewer to check synergy impact of the swap.
+7. Display the updated synergy score, price delta, and affected sections.
+
+### rerun
+Re-spawn the full pipeline with the same intake parameters. Fresh correction counter.
+
+### adjust
+Ask the user which parameters to change. Update intake parameters, then re-run the full pipeline.
+
+---
+
+## Error Handling
+
+### Scryfall API Failures
+
+**Timeout / 5xx errors:**
+
+```
+Scryfall API is not responding. Retrying... (attempt <N>/3)
+
+[If all retries fail:]
+Scryfall API is currently unavailable. The deck builder requires
+Scryfall for card data and pricing.
+
+Options:
+  - Wait a few minutes and try again ("rerun")
+  - Check Scryfall status: https://status.scryfall.com
+```
+
+**Rate limiting (429):**
+
+The `card_lookup.py` script handles rate limiting internally with exponential backoff. If the user sees a brief pause, it is expected.
+
+### Impossible Budget Constraints
+
+Detected at intake (before pipeline starts). See Budget Warning at Intake above.
+
+### Invalid Commander
+
+Detected at intake. See Commander Validation above.
+
+### Invalid Card in Must-Include List
+
+When the user's card restrictions reference a card that fails Scryfall validation:
+
+```
+Card restriction issue: "<card_name>" (must-include)
+
+  "<card_name>" was not found in Scryfall.
+
+  [If did_you_mean available: "Did you mean: <suggestion>?"]
+  [If card is banned: "<correct_name> is banned in Commander — cannot include."]
+
+  Please correct the card name or remove it from restrictions.
+```
+
+---
+
+## Conversational Tone
+
+- Intake questions: conversational, helpful — "Which colors do you want to play?" not "Specify color identity parameter."
+- Validation success: confident, brief — "Commander confirmed." not "Validation complete: status SUCCESS."
+- Validation failure: clear, constructive — "Card not found — did you mean...?"
+- Synergy rationale: technical but readable — "Triggers Blood Artist on each sacrifice"
+- Pipeline progress: informative, calm — "Checking color identity compliance..."
+
+**Do NOT display to the user:**
+- Internal agent template names or IDs
+- FR/AC numbers from the PRD
+- Raw Scryfall API responses
+- Pipeline config values (max_cycles, loop caps)
+- Synergy taxonomy category names in isolation (only in context, e.g., "5 interactions (Triggers, Feeds)")

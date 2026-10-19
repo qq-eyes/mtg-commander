@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "mtg-tools",
+  "description": "Commander / cEDH deck tooling for Claude Code",
+  "owner": {
+    "name": "Paul Baker"
+  },
+  "plugins": [
+    {
+      "name": "mtg-commander",
+      "description": "Build Commander/EDH decks from scratch, or audit an existing list against EDHTop16 and cedhstats tournament data to recommend swaps.",
+      "author": {
+        "name": "Paul Baker"
+      },
+      "category": "productivity",
+      "source": "./plugins/mtg-commander",
+      "homepage": "https://github.com/qq-eyes/mtg-commander"
+    }
+  ]
+}

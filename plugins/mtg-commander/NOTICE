@@ -1,0 +1,51 @@
+mtg-commander
+Copyright 2026 Paul Baker
+
+This product is licensed under the Apache License, Version 2.0.
+See LICENSE.txt for the full license text.
+
+--------------------------------------------------------------------------------
+Modifications
+--------------------------------------------------------------------------------
+
+Original work: mtg-commander — a multi-agent Commander/EDH deck builder driven
+by the Scryfall API, with a four-agent build pipeline (Deck Builder, Rules
+Judge, Optimization Reviewer, Price Evaluator) and paired adversarial
+challengers.
+
+Modifications made 2026-10-18 by Paul Baker:
+
+  - Added audit mode: evaluating an existing deck against EDHTop16 and
+    cedhstats tournament data and producing a ranked swap sheet
+    (SKILL.md "Audit Mode"; references/audit-guide.md).
+  - Added scripts/deck_sources.py, scripts/meta_sources.py, and
+    scripts/audit_compare.py.
+  - Added partner commander support ("Partner", "Partner with", "Choose a
+    Background", "Friends forever"): 98-card mainboard, union color identity,
+    and a --partner flag on `validate-deck` (references/commander-rules.md,
+    references/rules-judge-guide.md, references/intake-questions.md).
+  - Added an `audit` block to the .mtg-commander.yml schema.
+  - Added evals/evals.json.
+  - Replaced runtime-specific instructions (Task-tool / omp references) with
+    runtime-neutral sub-agent language.
+  - Updated the trigger description in SKILL.md frontmatter to cover audit
+    requests.
+
+--------------------------------------------------------------------------------
+Third-party services
+--------------------------------------------------------------------------------
+
+This skill talks to the following external services at runtime. It bundles none
+of their content and requires no credentials for any of them:
+
+  - Scryfall (api.scryfall.com) — card data and pricing.
+  - Archidekt (archidekt.com) — deck import and Card Kingdom pricing.
+  - Moxfield (api2.moxfield.com) — deck import.
+  - cedhstats (cedhstats.org) — tournament card statistics.
+  - EDHTop16 (edhtop16.com) — tournament entries, sourced from Topdeck.gg.
+  - Jina reader (r.jina.ai) — optional fallback proxy used only when Moxfield
+    blocks a direct request.
+
+Magic: The Gathering is a trademark of Wizards of the Coast. This project is
+not affiliated with or endorsed by Wizards of the Coast, Scryfall, Moxfield,
+Archidekt, Topdeck.gg, cedhstats, or EDHTop16.

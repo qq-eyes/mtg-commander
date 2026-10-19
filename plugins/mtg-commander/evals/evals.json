@@ -1,0 +1,72 @@
+{
+  "skill_name": "mtg-commander",
+  "notes": "Prompts only. Deck URLs are placeholders (ExampleDeck000000000000) — substitute a real public deck when running. Evals 1-6 exercise audit mode (the newer, less-tested path). Evals 7-9 guard build-mode behaviours that regressed or were previously unsupported. Evals 10-11 encode two real failures observed while developing audit mode: board bleed and PPG overreach.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Evaluate my Rog Thras deck at https://moxfield.com/decks/ExampleDeck000000000000 against edhtop16 and cedhstats to see if there are any swaps I should consider. I'm especially interested in new cards from recent expansions.",
+      "expected_output": "Enters audit mode without build intake. Ingests deck with boards separate (98 mainboard + 2 commanders + 31 maybeboard). Fetches cedhstats and EDHTop16 data for the Rograkh/Thrasios pair. Produces a swap sheet with mechanical reasons, a new-card section filtered by first printing, a do-not-cut section, and explicit caveats about sample size and correlational PPG.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Here's my partner deck: https://moxfield.com/decks/ExampleDeck000000000000. Is it optimal for a 10k?",
+      "expected_output": "Recognises partner commanders, validates against the combined GUR identity (not either half), builds the EDHTop16 lookup with both names, and scopes the analysis to larger events. Does not reject the deck for having partners.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "I'm running a casual Tymna/Kraum deck for my local playgroup, bracket 3. What should I change?",
+      "expected_output": "Applies the scope gate: runs structural checks only and states that cEDH tournament data does not represent bracket-3 play, rather than presenting weak tournament evidence as applicable.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Audit this deck list I pasted below. Commander: Kinnan, Bonder Prodigy. Deck: 1 Sol Ring, 1 Arcane Signet, ...",
+      "expected_output": "Parses the pasted text list, distinguishes commanders from mainboard, flags that the list is incomplete rather than silently analysing a truncated deck, and offers to proceed with the cards provided or wait for the full export.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "How does my deck compare to the current meta? I care about what's winning right now, not the last year.",
+      "expected_output": "Uses a THREE_MONTHS EDHTop16 period rather than the ONE_YEAR default, states the filter it used, and notes the smaller sample size when reporting percentages.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "Write up the audit of my deck as a markdown file I can keep.",
+      "expected_output": "Writes a Markdown file into the working directory whose header names all three data sources and the pull date. Report follows the audit-guide structure: bottom line, swaps, test tier, new cards, do-not-cut, testing plan, caveats.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "Build me a Tymna and Kraum cEDH deck.",
+      "expected_output": "Accepts the partner pair in build mode, confirms combined WUBR identity, and builds 98 mainboard cards plus two commanders.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "Build me a partner deck, I want Thrasios.",
+      "expected_output": "Asks for the partner rather than guessing, explaining that the partner changes both color identity and game plan.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "prompt": "Build me a Kaalia deck with no cards over $20.",
+      "expected_output": "Standard build-mode intake with a per-card cap. Does not drift into audit mode or demand a decklist.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "My deck runs Underworld Breach and Brain Freeze, right? They're in my list.",
+      "expected_output": "Checks the actual board placement. If those cards are only in the maybeboard, corrects the user explicitly and cites which board they came from rather than agreeing.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "prompt": "Chain of Vapor has a negative PPG signal, so I should cut it, yeah?",
+      "expected_output": "Pushes back: applies the do-not-cut override, explains that top-list presence and the card's role as core interaction outweigh a correlational average, recommends testing rather than cutting, and does not simply agree.",
+      "files": []
+    }
+  ]
+}
