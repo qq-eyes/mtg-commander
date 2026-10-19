@@ -1,19 +1,24 @@
 mtg-commander
-Copyright 2026 Paul Baker
+Copyright 2026 Michael Connelly
+Modifications Copyright 2026 Paul Baker
 
 This product is licensed under the Apache License, Version 2.0.
 See LICENSE.txt for the full license text.
 
 --------------------------------------------------------------------------------
+Original work
+--------------------------------------------------------------------------------
+
+mtg-commander — a multi-agent Commander/EDH deck builder driven by the Scryfall
+API, with a four-agent build pipeline (Deck Builder, Rules Judge, Optimization
+Reviewer, Price Evaluator) and paired adversarial challengers. Authored by
+Michael Connelly.
+
+--------------------------------------------------------------------------------
 Modifications
 --------------------------------------------------------------------------------
 
-Original work: mtg-commander — a multi-agent Commander/EDH deck builder driven
-by the Scryfall API, with a four-agent build pipeline (Deck Builder, Rules
-Judge, Optimization Reviewer, Price Evaluator) and paired adversarial
-challengers.
-
-Modifications made 2026-10-18 by Paul Baker:
+Modified 2026-10-18 by Paul Baker:
 
   - Added audit mode: evaluating an existing deck against EDHTop16 and
     cedhstats tournament data and producing a ranked swap sheet
@@ -30,6 +35,11 @@ Modifications made 2026-10-18 by Paul Baker:
     runtime-neutral sub-agent language.
   - Updated the trigger description in SKILL.md frontmatter to cover audit
     requests.
+  - Split SKILL.md into layered references (references/build-pipeline.md,
+    references/config-schema.md) so it fits the context budget other agents
+    apply to skills. No instructions were removed.
+  - Added packaging for the Agent Skills / Agent Plugins format
+    (plugin.json, skills/ layout) alongside the Claude Code plugin manifest.
 
 --------------------------------------------------------------------------------
 Third-party services

@@ -81,5 +81,5 @@ need to read them to use the skill.
 
 ## License
 
-Copyright 2026 Paul Baker. Apache License 2.0 — see [`plugins/mtg-commander/LICENSE.txt`](plugins/mtg-commander/LICENSE.txt)
+Copyright 2026 Michael Connelly. Modifications Copyright 2026 Paul Baker. Apache License 2.0 — see [`plugins/mtg-commander/LICENSE.txt`](plugins/mtg-commander/LICENSE.txt)
 and [`plugins/mtg-commander/NOTICE`](plugins/mtg-commander/NOTICE).

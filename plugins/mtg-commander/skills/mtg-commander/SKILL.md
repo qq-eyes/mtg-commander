@@ -13,10 +13,10 @@ description: >
   includes a Moxfield, Archidekt, or EDHTop16 deck link alongside a request for
   feedback. Use this skill whenever a Commander deck is being built, critiqued,
   or tuned, even if the user does not say "deck builder".
-license: Apache-2.0. Copyright 2026 Paul Baker. See LICENSE.txt and NOTICE.
+license: Apache-2.0. Copyright 2026 Michael Connelly; modifications Copyright 2026 Paul Baker. See LICENSE.txt and NOTICE.
 compatibility: Requires Python 3.10+ (standard library only) and network access to Scryfall, Moxfield, Archidekt, cedhstats, and EDHTop16.
 metadata:
-  author: Paul Baker
+  author: Michael Connelly (original); Paul Baker (modifications)
   version: "2.0.0"
   model_awareness: opus-4-7
   last_audited: "2026-10-18"

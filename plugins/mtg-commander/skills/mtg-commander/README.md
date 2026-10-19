@@ -200,8 +200,8 @@ Scryfall rate-limits per client, and `audit_compare.py`'s new-card screen is the
 
 ## License and attribution
 
-Copyright 2026 Paul Baker. Licensed under the Apache License, Version 2.0 — see
-[`LICENSE.txt`](./LICENSE.txt).
+Copyright 2026 Michael Connelly. Modifications Copyright 2026 Paul Baker.
+Licensed under the Apache License, Version 2.0 — see [`LICENSE.txt`](./LICENSE.txt).
 
 The audit mode, partner-commander support, and the scripts that support them
 were added in October 2026; [`NOTICE`](./NOTICE) records exactly what changed.
