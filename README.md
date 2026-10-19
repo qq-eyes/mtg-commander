@@ -17,7 +17,7 @@ sample sizes honestly instead of passing off correlational numbers as verdicts.
 
 ### Claude Code
 
-This repository is a private plugin marketplace. Once you've been given access:
+This repository is a Claude Code plugin marketplace. Add it, then install the plugin:
 
 ```
 /plugin marketplace add qq-eyes/mtg-commander
