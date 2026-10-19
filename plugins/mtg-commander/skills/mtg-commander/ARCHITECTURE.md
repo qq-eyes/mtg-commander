@@ -122,7 +122,7 @@ Every pipeline step — primary or challenger — MUST be dispatched as a separa
 - **Adversarial independence** — a challenger sharing context with the primary it reviews cannot meaningfully challenge.
 - **Correction-loop integrity** — routing fails if agent boundaries are absent; the correction signal has nothing to travel between.
 
-**Anti-pattern (real session `REDACTED`):** "I'll run the agent roles inline to keep things moving." This collapsed all four agents into a single context window, destroyed adversarial independence, and produced a deck with **14 undetected color identity violations**. The correction loop never fired — there were no boundaries to trigger it. This is the exact failure the guardrail exists to prevent.
+**Anti-pattern (observed in an early development run):** "I'll run the agent roles inline to keep things moving." This collapsed all four agents into a single context window, destroyed adversarial independence, and produced a deck with **14 undetected color identity violations**. The correction loop never fired — there were no boundaries to trigger it. This is the exact failure the guardrail exists to prevent.
 
 ---
 
