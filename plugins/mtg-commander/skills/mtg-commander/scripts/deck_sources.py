@@ -10,8 +10,8 @@ were in the deck.
 stdlib only — no pip dependencies. JSON to stdout.
 
 Usage:
-    python deck_sources.py moxfield --id ExampleDeck000000000000
-    python deck_sources.py moxfield --url https://moxfield.com/decks/ExampleDeck000000000000
+    python deck_sources.py moxfield --id ABC123defGhi456Jkl789
+    python deck_sources.py moxfield --url https://moxfield.com/decks/ABC123defGhi456Jkl789
     python deck_sources.py archidekt --id 1234567
     python deck_sources.py archidekt --url https://archidekt.com/decks/1234567/example-deck
     python deck_sources.py file --path deck.txt

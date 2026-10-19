@@ -1,22 +1,22 @@
 {
   "skill_name": "mtg-commander",
-  "notes": "Prompts only. Deck URLs are placeholders (ExampleDeck000000000000) — substitute a real public deck when running. Evals 1-6 exercise audit mode (the newer, less-tested path). Evals 7-9 guard build-mode behaviours that regressed or were previously unsupported. Evals 10-11 encode two real failures observed while developing audit mode: board bleed and PPG overreach.",
+  "notes": "Prompts only. Deck URLs point to real public Moxfield decks (not the maintainer's) so the prompts run as written; any public deck works. Evals 1-6 exercise audit mode (the newer, less-tested path). Evals 7-9 guard build-mode behaviours that regressed or were previously unsupported. Evals 10-11 encode two real failures observed while developing audit mode: board bleed and PPG overreach.",
   "evals": [
     {
       "id": 1,
-      "prompt": "Evaluate my Rog Thras deck at https://moxfield.com/decks/ExampleDeck000000000000 against edhtop16 and cedhstats to see if there are any swaps I should consider. I'm especially interested in new cards from recent expansions.",
+      "prompt": "Evaluate my Najeela deck at https://moxfield.com/decks/jT8Y9X4tlUmeNZ2AjkD1Vg against edhtop16 and cedhstats to see if there are any swaps I should consider. I'm especially interested in new cards from recent expansions.",
       "expected_output": "Enters audit mode without build intake. Ingests deck with boards separate (98 mainboard + 2 commanders + 31 maybeboard). Fetches cedhstats and EDHTop16 data for the Rograkh/Thrasios pair. Produces a swap sheet with mechanical reasons, a new-card section filtered by first printing, a do-not-cut section, and explicit caveats about sample size and correlational PPG.",
       "files": []
     },
     {
       "id": 2,
-      "prompt": "Here's my partner deck: https://moxfield.com/decks/ExampleDeck000000000000. Is it optimal for a 10k?",
+      "prompt": "Here's my partner deck: https://moxfield.com/decks/G-RUVy_CMUWzXlhJknIzZg. Is it optimal for a 10k?",
       "expected_output": "Recognises partner commanders, validates against the combined GUR identity (not either half), builds the EDHTop16 lookup with both names, and scopes the analysis to larger events. Does not reject the deck for having partners.",
       "files": []
     },
     {
       "id": 3,
-      "prompt": "I'm running a casual Tymna/Kraum deck for my local playgroup, bracket 3. What should I change?",
+      "prompt": "I'm running a casual Meren of Clan Nel Toth deck for my local playgroup, bracket 3. What should I change?",
       "expected_output": "Applies the scope gate: runs structural checks only and states that cEDH tournament data does not represent bracket-3 play, rather than presenting weak tournament evidence as applicable.",
       "files": []
     },
@@ -40,13 +40,13 @@
     },
     {
       "id": 7,
-      "prompt": "Build me a Tymna and Kraum cEDH deck.",
+      "prompt": "Build me a Krark and Sakashima cEDH deck.",
       "expected_output": "Accepts the partner pair in build mode, confirms combined WUBR identity, and builds 98 mainboard cards plus two commanders.",
       "files": []
     },
     {
       "id": 8,
-      "prompt": "Build me a partner deck, I want Thrasios.",
+      "prompt": "Build me a partner deck, I want Tymna.",
       "expected_output": "Asks for the partner rather than guessing, explaining that the partner changes both color identity and game plan.",
       "files": []
     },
