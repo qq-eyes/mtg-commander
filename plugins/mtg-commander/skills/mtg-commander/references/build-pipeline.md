@@ -1,204 +1,46 @@
+# Build Mode — Intake and Agent Pipeline
+
+Reference document for the **build mode** of `mtg-commander`. Load this file when
+the user asks for a new deck rather than supplying one to audit.
+
+Everything here is build-mode specific. Audit mode lives in `SKILL.md` and
+`references/audit-guide.md`.
+
+## Contents
+
+1. Intake flow (the 7 parameters, commander validation, partner resolution)
+2. Agent pipeline (banner, state, reference loading)
+3. Agent 1 — Deck Builder
+4. Agent 2 — Rules Judge
+5. Agent 3 — Optimization Reviewer
+6. Agent 4 — Price Evaluator
+7. Challenger agents
+8. Adversarial loop protocol
+9. Correction cycles
+10. Final output
+11. Post-output action handling
+12. Error handling
+
 ---
-name: mtg-commander
-description: >
-  MTG Commander deck builder and deck auditor. Build synergy-dense,
-  format-legal, budget-compliant 100-card Commander decklists from scratch, or
-  audit an existing list against real tournament data from EDHTop16 and
-  cedhstats to recommend swaps. Handles partner commanders, cEDH lists, and
-  new-card screening from recent sets. Triggers on phrases like "build a
-  commander deck", "MTG deck", "commander deck", "EDH deck", "build me a deck",
-  "100-card deck", "commander pipeline", "deck builder", and on audit requests
-  such as "evaluate my deck", "is this list optimal", "what should I swap",
-  "how does my deck compare to the meta", "deck help", or any message that
-  includes a Moxfield, Archidekt, or EDHTop16 deck link alongside a request for
-  feedback. Use this skill whenever a Commander deck is being built, critiqued,
-  or tuned, even if the user does not say "deck builder".
-license: Apache License 2.0 - Copyright 2026 Paul Baker. See LICENSE.txt and NOTICE.
-model_awareness: opus-4-7
-last_audited: 2026-10-18
-pattern_library_version: 4-7-2
----
-
-# MTG Commander Deck Builder & Auditor
-
-Two modes sharing one toolkit:
-
-- **Build mode** — a multi-agent pipeline that constructs optimized, format-legal,
-  budget-compliant Commanders decklists from intake parameters.
-- **Audit mode** — evaluate an existing deck against tournament data and produce a
-  swap sheet. This is the mode to use whenever the user supplies a deck.
-
-Both modes share `scripts/card_lookup.py` (Scryfall) and the reference library.
-Audit mode adds `scripts/deck_sources.py`, `scripts/meta_sources.py`, and
-`scripts/audit_compare.py`.
-
-> **User-facing guide:** see [`README.md`](README.md) for install, quick start, and troubleshooting. Config authoring walkthrough at [`references/config-walkthrough.md`](references/config-walkthrough.md). Audit methodology: [`references/audit-guide.md`](references/audit-guide.md).
-
-## Mode Selection
-
-Decide before intake:
-
-| The user… | Mode |
-|---|---|
-| Asks for a deck, names a commander with no list, wants to start fresh | **Build** |
-| Supplies a decklist, deck URL, or asks what to change about an existing deck | **Audit** |
-| Supplies a deck *and* asks for a rebuild | **Audit first**, then offer targeted swaps |
-| Asks how a deck compares to the meta, or whether a list is optimal | **Audit** |
-
-Auditing before rebuilding matters: a full rebuild discards the pilot's tuning,
-card availability, and playgroup context. Most decks that arrive for review are
-already close to correct and need a handful of swaps, not a new list. Offer the
-rebuild only after showing that the list is far from the consensus core.
-
-Say which mode you are entering in one line, then proceed. Do not run build-mode
-intake questions on a user who handed you a deck.
 
 ## Sub-Agent Dispatch Guardrail
 
-Every pipeline step — primary agents and challenger agents alike — MUST be dispatched as a separate sub-agent using whatever sub-agent mechanism the current runtime provides (the Agent tool in Claude Code; equivalent task/sub-agent tools elsewhere). This is NON-NEGOTIABLE.
+Every pipeline step — primary and challenger alike — MUST be dispatched as a
+separate sub-agent using whatever sub-agent mechanism the runtime provides (the
+Agent tool in Claude Code; equivalent task tools elsewhere).
 
-NEVER inline any pipeline step. Running a pipeline step inside the orchestrator's own context instead of spawning a dedicated sub-agent is a GUARDRAIL VIOLATION. If you catch yourself thinking "I'll just run this step inline to save time," stop. That thought is the violation.
+NEVER run a pipeline step inline. Inlining is a guardrail violation.
 
-**Rationale:**
+**Why:** context isolation (each agent gets only its defined inputs),
+adversarial independence (a challenger sharing context with the primary it
+reviews cannot meaningfully challenge it), and correction-loop integrity
+(routing requires agent boundaries to route between).
 
-- **Context isolation** — each agent receives only its defined inputs (deck state, intake params, reference files). No bleed from prior agent reasoning.
-- **Adversarial independence** — challengers MUST NOT share context with the primary they are reviewing. Shared context defeats the entire adversarial architecture.
-- **Correction loop integrity** — self-correction routing depends on clean agent boundaries. Inlined steps corrupt the correction signal.
-
-**Anti-pattern (from real session REDACTED):**
-
-> "I'll run the agent roles inline to keep things moving..."
-
-This collapsed all four agents into a single context window, destroyed adversarial independence, and produced a deck with 14 undetected color identity violations. The correction loop never fired because there were no agent boundaries to trigger it. NEVER repeat this.
-
-**All 8 dispatches** (4 primary + 4 challenger) MUST be separate sub-agent invocations — one per dispatch. No exceptions. No "just this once." No "it's a simple deck."
-
-## Configuration (.mtg-commander.yml)
-
-At pipeline start (after intake confirmation, before the pipeline banner), check the user's working directory for `.mtg-commander.yml`.
-
-**If absent:** Use all defaults. Output a one-line note: `No .mtg-commander.yml found — using defaults. Create one to customize loop caps, price goals, and escalation.`
-
-**If present:** Validate keys against the schema below. Apply overrides for recognized keys. Use defaults for any missing keys. Warn on invalid or unrecognized keys (list their names) but NEVER fail the pipeline due to config. A parse-failure (invalid YAML) also warns and falls back to all defaults.
-
-**Status line** (shown after intake, before banner):
-- Config loaded: `Config loaded from .mtg-commander.yml (version 1)`
-- Config absent: `No .mtg-commander.yml found — using defaults.`
-
-### Schema (version 1)
-
-```yaml
-version: 1                    # schema version — required for future migrations
-loops:
-  deck_builder: 2             # max adversarial loop iterations for Deck Builder/Challenger
-  rules_judge: 2              # max adversarial loop iterations for Rules Judge/Challenger
-  optimizer: 2                # max adversarial loop iterations for Optimization/Challenger
-  price_evaluator: 2          # max adversarial loop iterations for Price/Challenger
-correction:
-  max_cycles: 3               # max Deck Builder correction cycles per pipeline run (default 3)
-price_rules:
-  max_card_price: null         # soft per-card goal in USD; null = no goal (15% hard cap still applies)
-  escalation: true             # true = escalate unsubstitutable over-goal cards to user; false = auto-substitute silently
-  budget_source: higher        # higher | tcgplayer | cardkingdom — which vendor total to use for budget check
-escalation:
-  on_loop_exhaustion: warn     # warn | block | best-effort — behavior when adversarial loop cap is reached without PASS
-audit:
-  period: ONE_YEAR             # ONE_MONTH | THREE_MONTHS | SIX_MONTHS | ONE_YEAR — EDHTop16 window
-  min_event_size: 0            # 0 = all events; 50 for serious competitive analysis
-  top_decks: 8                 # top-finishing decklists to diff against
-  new_card_since: null         # YYYY-MM-DD first-printing cutoff; null = 12 months back
-```
-
-### Defaults
-
-All keys above show their default values. Missing file = all defaults. Partial file = stated values override defaults, unstated keys use defaults. Unknown keys = warned and ignored.
-
-### Validation Rules
-
-- `version` must be `1` (integer). Other values: warn, use defaults.
-- `loops.*` must be positive integers >= 1. Invalid: warn, use default (2).
-- `price_rules.max_card_price` must be null or a positive number. Invalid: warn, use null.
-- `price_rules.escalation` must be boolean. Invalid: warn, use true.
-- `price_rules.budget_source` must be one of `higher`, `tcgplayer`, `cardkingdom`. Invalid: warn, use `higher`.
-- `escalation.on_loop_exhaustion` must be one of `warn`, `block`, `best-effort`. Invalid: warn, use `warn`.
-- `correction.max_cycles` must be a positive integer >= 1. Invalid: warn, use default (3).
-- `audit.period` must be one of `ONE_MONTH`, `THREE_MONTHS`, `SIX_MONTHS`, `ONE_YEAR`. Invalid: warn, use `ONE_YEAR`.
-- `audit.min_event_size` must be a non-negative integer. Invalid: warn, use 0.
-- `audit.top_decks` must be a positive integer <= 20. Invalid: warn, use 8.
-- `audit.new_card_since` must be null or a `YYYY-MM-DD` date. Invalid: warn, use null.
-
----
-
-## Required Setup
-
-All network access goes through the scripts in `scripts/` (Python stdlib `urllib`), run via the Bash tool — no WebFetch allowlist or provider-side domain permissions are involved. Nothing to configure before first use.
-
-Network dependencies:
-
-| Script | Hosts | Notes |
-|---|---|---|
-| `card_lookup.py` | api.scryfall.com, archidekt.com | Scryfall requires both `User-Agent` and `Accept` headers |
-| `deck_sources.py` | api2.moxfield.com, archidekt.com, r.jina.ai | Moxfield is Cloudflare-protected; Jina reader is a fallback for public/unlisted decks |
-| `meta_sources.py` | cedhstats.org, edhtop16.com | HTML scrapers; parsers degrade to warnings rather than crashing |
-| `audit_compare.py` | api.scryfall.com | Paginated bulk queries plus a local printing cache under `~/.cache/mtg-commander/` |
-
-Scryfall rate-limits aggressively. `audit_compare.py` paces requests and backs off on 429, but do not run several audits concurrently — they will starve each other.
-
-## Overview
-
-**Build mode** orchestrates four sub-agents through a sequential pipeline:
-
-1. **Deck Builder** -- Intake, commander validation, synergy-first card selection
-2. **Rules Judge** -- Format legality validation (100 cards, color identity, banned list, singleton)
-3. **Optimization Reviewer** -- Synergy density, structural minimums, mana curve analysis
-4. **Price Evaluator** -- Budget compliance, per-card caps, live Scryfall pricing
-
-The pipeline self-corrects: when an agent returns FAIL, violations route back to the Deck Builder for correction. Max correction cycles are governed by the `correction.max_cycles` key in `.mtg-commander.yml` (default: 3).
-
-**Audit mode** runs a shorter sequence against an existing deck — ingest, fetch
-tournament data, compare, report. See [Audit Mode](#audit-mode) below. It does
-not use the 4-agent build pipeline; its value comes from the deterministic
-comparison scripts plus disciplined interpretation of correlational data.
-
----
-
-## Card Lookup Utility
-
-All agents use `card_lookup.py` via the Bash tool for Scryfall API access:
-
-```
-python ${SKILL_DIR}/scripts/card_lookup.py validate --name "Sol Ring"
-python ${SKILL_DIR}/scripts/card_lookup.py search --query "oracle:sacrifice type:creature id:B legal:commander"
-python ${SKILL_DIR}/scripts/card_lookup.py batch --names "Sol Ring" "Dark Ritual" "Cabal Coffers"
-python ${SKILL_DIR}/scripts/card_lookup.py price --name "Sol Ring"
-python ${SKILL_DIR}/scripts/card_lookup.py batch-price --names "Sol Ring" "Dark Ritual"
-python ${SKILL_DIR}/scripts/card_lookup.py ck-price --name "Sol Ring"
-python ${SKILL_DIR}/scripts/card_lookup.py ck-batch-price --names "Sol Ring" "Dark Ritual" "Phyrexian Arena"
-python ${SKILL_DIR}/scripts/card_lookup.py random-commander --colors BG --strategy sacrifice
-python ${SKILL_DIR}/scripts/card_lookup.py validate-deck --commander "Karlov of the Ghost Council" --cards "Sol Ring" "Sejiri Refuge" "Dark Ritual"
-```
-
-### Audit-mode scripts
-
-Audit mode adds three scripts. They emit JSON and keep deck boards separate —
-never flatten commanders, mainboard, and maybeboard into one list.
-
-```
-python ${SKILL_DIR}/scripts/deck_sources.py moxfield --id <publicId>
-python ${SKILL_DIR}/scripts/deck_sources.py archidekt --id <numericId>
-python ${SKILL_DIR}/scripts/deck_sources.py file --path deck.txt
-
-python ${SKILL_DIR}/scripts/meta_sources.py cedhstats --commanders "A" "B"
-python ${SKILL_DIR}/scripts/meta_sources.py edhtop16 --commanders "A" "B" \
-    --period ONE_YEAR --min-size 0 --top-decks 8
-
-python ${SKILL_DIR}/scripts/audit_compare.py \
-    --deck deck.json --cedh cedh.json --edhtop edh.json --since 2025-01-01
-```
-
-`card_lookup.py validate-deck` validates against one commander. For a partner
-pair, validate each card against the union by passing the larger-identity half
-and then re-checking cards that carry colors unique to the other half.
+The failure this prevents is concrete: collapsing the four agents into one
+context window destroys adversarial independence and ships decks with
+undetected color-identity violations, because the correction loop never fires
+without boundaries. All 8 dispatches (4 primary + 4 challenger) are separate
+sub-agent invocations. No exceptions.
 
 ---
 
@@ -347,94 +189,6 @@ Proceeding to deck construction.
 
 ---
 
-## Audit Mode
-
-Audit mode evaluates a deck that already exists. It is lighter than the build
-pipeline: three scripted data steps, then analysis. Load
-[`references/audit-guide.md`](references/audit-guide.md) before starting — it
-defines the evidence hierarchy, the reporting format, and the rules for what
-not to recommend cutting.
-
-### Audit intake
-
-Extract what you can from the message; ask only for what is missing.
-
-| Input | Source | Default |
-|---|---|---|
-| Deck | URL, pasted list, or file | Required |
-| Goal | The user's own words ("top cut a 10K", "beat my local meta") | General optimization |
-| Time window | Explicit, or infer from goal | `ONE_YEAR`; `THREE_MONTHS` if the goal is about the current meta |
-| Event size floor | Explicit, else infer | `0` (all). Use `50` for serious competitive goals |
-| Budget | Explicit | None (report prices, don't filter) |
-| Scope | `full`, `new-cards`, `mana`, `interaction` | `full` |
-
-Confirm in one line, then run. Audit intake is deliberately short — the user
-already has a deck and wants an answer, not a questionnaire.
-
-### Audit steps
-
-**1. Ingest.** Keep boards separate.
-
-```bash
-python ${SKILL_DIR}/scripts/deck_sources.py moxfield --id <id>
-python ${SKILL_DIR}/scripts/deck_sources.py archidekt --id <id>
-python ${SKILL_DIR}/scripts/deck_sources.py file --path <path>
-```
-
-If `deck_total` is not 100, stop and resolve it. If `warnings` reports
-multiple copies outside basics or no commanders, surface that before analysis.
-
-**2. Tournament data.** Pass both names for partner pairs.
-
-```bash
-python ${SKILL_DIR}/scripts/meta_sources.py cedhstats --commanders "<A>" "<B>"
-python ${SKILL_DIR}/scripts/meta_sources.py edhtop16 --commanders "<A>" "<B>" \
-    --period ONE_YEAR --min-size 0 --top-decks 8
-```
-
-If either site returns `error`, say so plainly and continue with what you have.
-Never present an empty result as "no data exists" — distinguish "site had no
-record" from "fetch failed."
-
-**3. Compare.**
-
-```bash
-python ${SKILL_DIR}/scripts/audit_compare.py \
-    --deck deck.json --cedh cedh.json --edhtop edh.json --since <YYYY-MM-DD>
-```
-
-`--since` should be 12–18 months back unless the user asks for a shorter new-card
-window. Quote these tables rather than recomputing figures in prose.
-
-**4. Analyze and report.** Follow `references/audit-guide.md` §6–§9:
-
-- Classify: tune (≥60 of 100 cards in the top-list core), rework (40–59), or
-  rebuild (<40).
-- Rank cuts by evidence against, then apply the do-not-cut overrides.
-- Pair each cut with an add and a **mechanical** reason.
-- Separate high-confidence swaps from tests.
-- Screen new cards by first printing and report adoption honestly.
-- State sample sizes, filters, and the pull date.
-
-### Audit output
-
-Use the report structure in `references/audit-guide.md` §9. Do not emit the
-build pipeline's game-plan/category/price sections — an audit's deliverable is
-a swap sheet and the reasoning behind it.
-
-If the user wants the audit written up for later use, write a Markdown file into
-the working directory with a header naming all three data sources and the pull
-date.
-
-### Audit guardrails
-
-- Never recommend a cut without naming the replacement and the reason.
-- Never merge maybeboard or sideboard cards into the deck.
-- Never cite a percentage you did not get from the scripts.
-- Never apply cEDH tournament data to a bracket 1–3 deck; run structural checks
-  only and say why.
-- If the user's deck is already well-positioned, say so. "Six swaps and you're
-  current" is a complete and useful answer.
 
 ---
 
@@ -474,7 +228,11 @@ Before spawning each agent, read the reference files it needs using the Read too
 | Optimization Reviewer | `references/optimizer-guide.md`, `references/synergy-taxonomy.md`, `references/structural-minimums.md` |
 | Price Evaluator | `references/price-evaluator-guide.md`, `references/api-reference.md` |
 
-All paths are relative to `${SKILL_DIR}` — the skill's own directory (the `mtg-commander/` folder containing this `SKILL.md`; resolve it to an absolute path at dispatch time and pass that path to each sub-agent).
+All paths are relative to `${SKILL_DIR}` — the skill's own directory (the
+folder containing `SKILL.md`; resolve it to an absolute path at dispatch time
+and pass that path to each sub-agent). This file itself lives at
+`references/build-pipeline.md` inside that directory, so `references/foo.md`
+resolves to `${SKILL_DIR}/references/foo.md`.
 
 ---
 
@@ -1308,6 +1066,8 @@ Ask the user which parameters to change. Update intake parameters, then re-run t
 
 ---
 
+---
+
 ## Error Handling
 
 ### Scryfall API Failures
@@ -1352,20 +1112,3 @@ Card restriction issue: "<card_name>" (must-include)
 
   Please correct the card name or remove it from restrictions.
 ```
-
----
-
-## Conversational Tone
-
-- Intake questions: conversational, helpful — "Which colors do you want to play?" not "Specify color identity parameter."
-- Validation success: confident, brief — "Commander confirmed." not "Validation complete: status SUCCESS."
-- Validation failure: clear, constructive — "Card not found — did you mean...?"
-- Synergy rationale: technical but readable — "Triggers Blood Artist on each sacrifice"
-- Pipeline progress: informative, calm — "Checking color identity compliance..."
-
-**Do NOT display to the user:**
-- Internal agent template names or IDs
-- FR/AC numbers from the PRD
-- Raw Scryfall API responses
-- Pipeline config values (max_cycles, loop caps)
-- Synergy taxonomy category names in isolation (only in context, e.g., "5 interactions (Triggers, Feeds)")

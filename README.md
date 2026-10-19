@@ -47,15 +47,23 @@ Scryfall rate-limits aggressively. Don't run audits in parallel.
 
 ```
 plugins/mtg-commander/
-├── SKILL.md              mode selection, pipeline, audit workflow
-├── README.md             skill-level documentation
-├── ARCHITECTURE.md       internal design for contributors
-├── references/           12 knowledge docs loaded on demand
-├── scripts/              4 stdlib-only Python tools
-├── evals/                test prompts
-├── LICENSE.txt           Apache 2.0
-└── NOTICE                attribution and modification record
+├── plugin.json                 Agent Plugins manifest (ChatGPT / Codex / others)
+├── .claude-plugin/plugin.json  Claude Code manifest
+├── LICENSE.txt                 Apache 2.0
+├── NOTICE                      attribution and modification record
+└── skills/mtg-commander/
+    ├── SKILL.md                mode selection and audit workflow
+    ├── README.md               skill-level documentation
+    ├── ARCHITECTURE.md         internal design for contributors
+    ├── references/             14 knowledge docs, loaded on demand
+    ├── scripts/                4 stdlib-only Python tools
+    ├── evals/                  test prompts
+    └── LICENSE.txt, NOTICE
 ```
+
+`SKILL.md` stays under 250 lines so it fits inside the context budget other
+agents apply to skills. The build-mode pipeline, config schema, and audit
+methodology live in `references/` and load only when a task needs them.
 
 The `references/` and `scripts/` directories are loaded on demand — you don't
 need to read them to use the skill.

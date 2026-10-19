@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "mtg-commander",
+  "version": "2.0.0",
+  "description": "Build Commander/EDH decks from scratch, or audit an existing list against EDHTop16 and cedhstats tournament data to recommend swaps. Handles partner commanders, cEDH lists, and new-card screening.",
+  "author": {
+    "name": "Paul Baker"
+  },
+  "homepage": "https://github.com/qq-eyes/mtg-commander",
+  "license": "Apache-2.0",
+  "keywords": ["mtg", "magic-the-gathering", "commander", "edh", "cedh", "deckbuilding"]
+}

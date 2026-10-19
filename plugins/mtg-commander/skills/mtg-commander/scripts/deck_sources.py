@@ -74,7 +74,7 @@ def _get_json(url: str, *, accept: str = "application/json") -> dict:
 # Moxfield
 # ---------------------------------------------------------------------------
 
-_MOXFIELD_ID = re.compile(r"moxfield\.com/decks/([A-Za-z0-9]+)")
+_MOXFIELD_ID = re.compile(r"moxfield\.com/decks/([A-Za-z0-9_-]+)")
 _MOXFIELD_API = "https://api2.moxfield.com/v3/decks/all/{id}"
 
 # Moxfield sits behind Cloudflare and returns a JS challenge to many clients.
@@ -329,7 +329,7 @@ def _deck_id(value: str, pattern: re.Pattern, kind: str) -> str:
     m = pattern.search(value)
     if m:
         return m.group(1)
-    if re.fullmatch(r"[A-Za-z0-9]+", value):
+    if re.fullmatch(r"[A-Za-z0-9_-]+", value):
         return value
     raise SystemExit(f"Could not parse {kind} id from: {value}")
 

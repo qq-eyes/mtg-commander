@@ -18,8 +18,11 @@ Audience of this document: contributors extending the plugin. For user-facing gu
 
 ## Components
 
-- **[`SKILL.md`](SKILL.md)** — orchestrator instructions: mode selection, intake flow, audit-mode steps, 4 primary agent prompt templates, 4 challenger agent specs, adversarial loop protocol, correction-cycle routing, and the `.mtg-commander.yml` schema (version 1 with an `audit` block).
-- **[`references/`](references/)** — 12 knowledge documents loaded on demand: `archetype-patterns.md`, `synergy-taxonomy.md`, `structural-minimums.md`, `intake-questions.md`, `commander-rules.md`, `banned-list.md`, `rules-judge-guide.md`, `optimizer-guide.md`, `price-evaluator-guide.md`, `api-reference.md`, `config-walkthrough.md`, and `audit-guide.md`.
+- **[`SKILL.md`](SKILL.md)** — the always-loaded entry point: mode selection, the sub-agent guardrail, config handling, script invocations, build-mode pointer, audit-mode steps, and tone. Kept under ~250 lines so it fits inside the context budget other agents apply to skills; everything bulky lives in `references/` and loads on demand.
+- **[`references/`](references/)** — 14 knowledge documents loaded on demand. Three exist because `SKILL.md` was split for portability: `build-pipeline.md` (build intake, the four agent prompt templates, challenger specs, loop protocol, correction cycles, final output, error handling), `config-schema.md` (`.mtg-commander.yml` schema and validation), and `audit-guide.md` (audit methodology). The rest: `archetype-patterns.md`, `synergy-taxonomy.md`, `structural-minimums.md`, `intake-questions.md`, `commander-rules.md`, `banned-list.md`, `rules-judge-guide.md`, `optimizer-guide.md`, `price-evaluator-guide.md`, `api-reference.md`, `config-walkthrough.md`, and `audit-guide.md`.
+
+  (`audit-guide.md` is counted once; it appears in both lists above because it is
+  both a split-out document and part of the reference library.)
 - **[`scripts/card_lookup.py`](scripts/card_lookup.py)** — stdlib-only Python client for Scryfall (`api.scryfall.com`) and Archidekt (`archidekt.com/api/cards/v2/`); emits JSON. `validate-deck` accepts `--partner`.
 - **[`scripts/deck_sources.py`](scripts/deck_sources.py)** — deck ingestion from Moxfield, Archidekt, or text. Emits boards separately; never merges maybeboard into the deck.
 - **[`scripts/meta_sources.py`](scripts/meta_sources.py)** — cedhstats and EDHTop16 scrapers. Emits commander summary, per-card inclusion/lift/PPG, staples, entries, and parsed top decklists.

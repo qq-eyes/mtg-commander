@@ -185,7 +185,9 @@ Scryfall rate-limits per client, and `audit_compare.py`'s new-card screen is the
   - [`structural-minimums.md`](references/structural-minimums.md) — ramp/draw/removal floors
   - [`banned-list.md`](references/banned-list.md) — current Commander banned list
   - [`commander-rules.md`](references/commander-rules.md) — format rules reference
-- **Repo root:** [`../README.md`](../README.md)
+  - [`build-pipeline.md`](references/build-pipeline.md) — build-mode intake, agent prompts, loops
+  - [`audit-guide.md`](references/audit-guide.md) — audit methodology and report format
+  - [`config-schema.md`](references/config-schema.md) — `.mtg-commander.yml` schema and validation
 
 ---
 
